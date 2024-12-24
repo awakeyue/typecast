@@ -3,15 +3,11 @@ import { marked } from "marked"
 interface TypecastOptions {
   speed?: number
   text?: string
-
-  delay?: number // 新增：延迟时间
+  delay?: number
   loop?: boolean
-  reverseSpeed?: number // 新增：倒序速度
-  reverseDelay?: number // 新增：倒序前的延迟时间
-
-  isHMTL?: boolean
-  isMarkdown?: boolean
-
+  reverseSpeed?: number
+  reverseDelay?: number
+  renderType?: 'text' | 'html' | 'markdown'
   onComplete?: () => void
   onType?: (currentText: string) => void
   cursor?: {
@@ -29,8 +25,9 @@ interface TextQueueItem {
   delay?: number
 }
 
-class Typecast {
+class TypedLine {
   private element: HTMLElement
+  private textContainer: HTMLElement
   private cursorElement: HTMLSpanElement
   private options: Required<TypecastOptions>
   private currentText: string = ""
@@ -51,10 +48,9 @@ class Typecast {
       text: "",
       delay: 0,
       loop: false,
-      reverseSpeed: options.speed || 100, // 默认使用正向速度
-      reverseDelay: 1000, // 默认1秒延迟
-      isHMTL: false,
-      isMarkdown: false,
+      reverseSpeed: options.speed || 100,
+      reverseDelay: 1000,
+      renderType: 'text',
       onComplete: () => {},
       onType: () => {},
       ...options,
@@ -70,8 +66,21 @@ class Typecast {
         ...(options.cursor || {})
       }
     }
+    
 
+    // 创建文本容器和光标元素
+    this.textContainer = document.createElement("span")
     this.cursorElement = document.createElement("span")
+
+    // markdown
+    if (options.renderType === 'markdown') {
+      this.textContainer.classList.add('markdown-body')
+    }
+    
+    // 初始化结构
+    this.element.appendChild(this.textContainer)
+    this.element.appendChild(this.cursorElement)
+    
     this.initCursor()
 
     if (this.options.text) {
@@ -105,9 +114,7 @@ class Typecast {
       }
     `
     document.head.appendChild(style)
-
-    this.element.appendChild(this.cursorElement)
-    this.startCursorHideTimer()
+    
     return this
   }
 
@@ -135,6 +142,16 @@ class Typecast {
     return this
   }
 
+  private updateText(): void {
+    if (this.options.renderType === 'html' || this.options.renderType === 'markdown') {
+      this.textContainer.innerHTML = marked(this.currentText) as string
+    } else {
+      this.textContainer.textContent = this.currentText
+    }
+    this.options.onType(this.currentText)
+  }
+
+  // 其余方法保持不变...
   addText(text: string, delay?: number): this {
     if (this.options.loop) {
       console.warn("addText method is disabled when loop option is true")
@@ -183,8 +200,7 @@ class Typecast {
       ? { text: this.options.text, delay: this.options.delay }
       : null
     this.isReverse = false
-    this.element.textContent = ""
-    this.element.appendChild(this.cursorElement)
+    this.textContainer.innerHTML = ""
     if (this.cursorHideTimeout) {
       clearTimeout(this.cursorHideTimeout)
     }
@@ -226,7 +242,6 @@ class Typecast {
 
     if (elapsed >= currentSpeed) {
       this.lastTime = timestamp
-      this.showCursor()
 
       if (this.options.loop) {
         this.handleLoopAnimation()
@@ -241,13 +256,10 @@ class Typecast {
   private handleLoopAnimation(): void {
     if (!this.currentQueueItem) return
 
-    const { text } = this.currentQueueItem
-
     if (!this.isReverse) {
-      if (this.currentIndex < text.length) {
-        const char = text.charAt(this.currentIndex)
-        this.currentText += char
-        this.currentIndex++
+      if (this.currentIndex < this.currentQueueItem.text.length) {
+        this.updateCurrentText('increase')
+        this.updateText()
       } else {
         this.isReverse = true
         this.pause()
@@ -258,8 +270,8 @@ class Typecast {
       }
     } else {
       if (this.currentIndex > 0) {
-        this.currentIndex--
-        this.currentText = text.substring(0, this.currentIndex)
+        this.updateCurrentText('decrease')
+        this.updateText()
       } else {
         this.isReverse = false
         this.pause()
@@ -269,88 +281,68 @@ class Typecast {
         return
       }
     }
-
-    this.updateText()
-    this.options.onType(this.currentText)
   }
 
   private handleQueueAnimation(): void {
     if (!this.currentQueueItem) return
 
     if (this.currentIndex < this.currentQueueItem.text.length) {
-      const char = this.currentQueueItem.text.charAt(this.currentIndex)
-      this.currentText += char
-      this.currentIndex++
-
+      this.updateCurrentText('increase')
       this.updateText()
-
-      this.options.onType(this.currentText)
     } else {
       this.processNextItem()
     }
   }
 
-  private updateText(): void {
-    this.element.innerHTML = ""
+  private updateCurrentText(type: 'increase' | 'decrease'): void {
+    if (!this.currentQueueItem) return
 
-    if (this.options.isHMTL || this.isHTML(this.currentText)) {
-      this.element.appendChild(this.parseHTML(this.currentText))
-    } else if (this.options.isMarkdown || this.isMarkdown(this.currentText)) {
-      this.element.appendChild(this.parseMarkdown(this.currentText))
-    } else {
-      const textNode = document.createTextNode(this.currentText)
-      this.element.appendChild(textNode)
-    }
-    this.element.appendChild(this.cursorElement)
-  }
-
-  private parseHTML(text: string): DocumentFragment {
-    const template = document.createElement("template")
-    template.innerHTML = text
-    return template.content
-  }
-
-  private parseMarkdown(text: string): DocumentFragment {
-    const html = marked(text) as string // 使用 markdown 解析库将 markdown 转换为 HTML
-    return this.parseHTML(html)
-  }
-
-  private isMarkdown(value: string): boolean {
-    const tokenTypes: string[] = []
-    // 使用marked的walkTokens选项来遍历Markdown的token
-    marked(value, {
-      walkTokens: (token) => {
-        tokenTypes.push(token.type)
+    if (type === 'increase') {
+      const currentChar = this.currentQueueItem.text.charAt(this.currentIndex)
+    
+      if (currentChar === '<') {
+        let tagContent = ''
+        let tempIndex = this.currentIndex
+      
+        while (tempIndex < this.currentQueueItem.text.length) {
+          const char = this.currentQueueItem.text.charAt(tempIndex)
+          tagContent += char
+          if (char === '>') {
+            break
+          }
+          tempIndex++
+        }
+      
+        this.currentText += tagContent
+        this.currentIndex = tempIndex + 1
+      } else {
+        this.currentText += currentChar
+        this.currentIndex++
       }
-    })
-    // 检查tokenTypes中是否包含Markdown的特定类型
-    const isMarkdown = [
-      "space",
-      "code",
-      "fences",
-      "heading",
-      "hr",
-      "link",
-      "blockquote",
-      "list",
-      "html",
-      "def",
-      "table",
-      "lheading",
-      "escape",
-      "tag",
-      "reflink",
-      "strong",
-      "codespan",
-      "url"
-    ].some((tokenType) => tokenTypes.includes(tokenType))
-    return isMarkdown
-  }
-
-  private isHTML(text: string): boolean {
-    const doc = new DOMParser().parseFromString(text, "text/html")
-    return Array.from(doc.body.childNodes).some((node) => node.nodeType === 1)
+    } else if (type === 'decrease') {
+      if (this.currentIndex > 0) {
+        const prevChar = this.currentQueueItem.text.charAt(this.currentIndex - 1)
+      
+        if (prevChar === '>') {
+          let tagEndIndex = this.currentIndex - 1
+          let tagStartIndex = tagEndIndex
+        
+          while (tagStartIndex >= 0) {
+            if (this.currentQueueItem.text.charAt(tagStartIndex) === '<') {
+              break
+            }
+            tagStartIndex--
+          }
+        
+          this.currentIndex = tagStartIndex
+          this.currentText = this.currentQueueItem.text.substring(0, tagStartIndex)
+        } else {
+          this.currentIndex--
+          this.currentText = this.currentQueueItem.text.substring(0, this.currentIndex)
+        }
+      }
+    }
   }
 }
 
-export default Typecast
+export default TypedLine

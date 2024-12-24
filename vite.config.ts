@@ -4,15 +4,15 @@ import dts from "vite-plugin-dts"
 export default defineConfig({
   build: {
     lib: {
-      entry: "./lib/typecast.ts",
-      name: "Typecast",
-      fileName: "typecast",
+      entry: "./lib/typedLine.ts",
+      name: "TypedLine",
+      fileName: "typedLine",
       formats: ["es", "iife", "umd"]
     }
   },
   plugins: [
     dts({
-      include: ["lib/typecast.ts"],
+      include: ["lib/typedLine.ts"],
       outDir: "dist"
     })
   ]
